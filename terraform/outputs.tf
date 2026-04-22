@@ -1,37 +1,36 @@
-output "s3_bucket_name" {
-  value       = aws_s3_bucket.terraform_state.id
-  description = "S3 Bucket Name"
+output "app_bucket_name" {
+  value       = aws_s3_bucket.app_bucket.id
+  description = "App S3 Bucket Name"
 }
 
-output "s3_bucket_arn" {
-  value       = aws_s3_bucket.terraform_state.arn
-  description = "S3 Bucket ARN"
+output "app_bucket_arn" {
+  value       = aws_s3_bucket.app_bucket.arn
+  description = "App S3 Bucket ARN"
 }
 
-output "s3_versioning_status" {
-  value       = aws_s3_bucket_versioning.terraform_state.versioning_configuration[0].status
-  description = "S3 Versioning Status"
+output "app_table_name" {
+  value       = aws_dynamodb_table.app_table.name
+  description = "App DynamoDB Table Name"
 }
 
-output "dynamodb_table_name" {
-  value       = aws_dynamodb_table.terraform_lock.name
-  description = "DynamoDB Table Name"
-}
-
-output "dynamodb_table_arn" {
-  value       = aws_dynamodb_table.terraform_lock.arn
-  description = "DynamoDB Table ARN"
+output "app_table_arn" {
+  value       = aws_dynamodb_table.app_table.arn
+  description = "App DynamoDB Table ARN"
 }
 
 output "summary" {
   value = <<-EOT
     =========================================
-    TERRAFORM BACKEND RESOURCES
+    APPLICATION RESOURCES
     =========================================
-    S3 Bucket  : ${aws_s3_bucket.terraform_state.id}
-    S3 ARN     : ${aws_s3_bucket.terraform_state.arn}
-    DynamoDB   : ${aws_dynamodb_table.terraform_lock.name}
-    State File : s3://${aws_s3_bucket.terraform_state.id}/infra/terraform.tfstate
+    App S3 Bucket  : ${aws_s3_bucket.app_bucket.id}
+    App DynamoDB   : ${aws_dynamodb_table.app_table.name}
+    -----------------------------------------
+    STATE BACKEND (managed by Bootstrap)
+    -----------------------------------------
+    State S3 Bucket : custom-s3-terraform-state
+    State DynamoDB  : custom-terraform-state-dynamodb-lock
+    State File      : s3://custom-s3-terraform-state/infra/terraform.tfstate
     =========================================
   EOT
 }

@@ -1,4 +1,4 @@
-name: Terraform - S3 and DynamoDB Backend
+name: Terraform - Create App Resources
 
 on:
   push:
@@ -15,7 +15,6 @@ on:
           - apply
           - destroy
 
-# Required for OIDC
 permissions:
   id-token: write
   contents: read
@@ -28,16 +27,9 @@ jobs:
         working-directory: terraform
 
     steps:
-    # ─────────────────────────────────────────
-    # STEP 1 - Checkout
-    # ─────────────────────────────────────────
     - name: Checkout Repository
       uses: actions/checkout@v4
 
-    # ─────────────────────────────────────────
-    # STEP 2 - Assume Role via OIDC
-    # No Access Keys needed!
-    # ─────────────────────────────────────────
     - name: Configure AWS Credentials via OIDC
       uses: aws-actions/configure-aws-credentials@v4
       with:
@@ -45,19 +37,18 @@ jobs:
         role-session-name: GitHubActionsSession
         aws-region: us-east-1
 
-    # ─────────────────────────────────────────
-    # STEP 3 - Verify Role
-    # ─────────────────────────────────────────
     - name: Verify AWS Identity
       run: |
         aws sts get-caller-identity
         echo "Role assumed successfully! ✅"
 
     # ─────────────────────────────────────────
-    # STEP 4 - Bootstrap Backend
-    # Create S3 + DynamoDB for state storage
+    # STEP 1 - Bootstrap
+    # Creates ONLY state backend resources
+    # S3 bucket + DynamoDB for tfstate
+    # NOT managed by Terraform!
     # ─────────────────────────────────────────
-    - name: Bootstrap Terraform Backend
+    - name: Bootstrap State Backend
       working-directory: .
       run: |
         STATE_BUCKET="custom-s3-terraform-state"
@@ -65,27 +56,24 @@ jobs:
         REGION="us-east-1"
 
         echo "========================================="
-        echo " Bootstrapping Terraform Backend"
+        echo " Bootstrapping State Backend"
+        echo " These resources store terraform state"
+        echo " They are NOT managed by Terraform!"
         echo "========================================="
 
-        # ── Create S3 bucket if not exists ──
+        # Create S3 state bucket if not exists
         if aws s3api head-bucket \
           --bucket $STATE_BUCKET 2>/dev/null; then
-          echo "S3 bucket exists: $STATE_BUCKET ✅"
+          echo "State bucket exists: $STATE_BUCKET ✅"
         else
-          echo "Creating S3 bucket: $STATE_BUCKET"
-
+          echo "Creating state bucket: $STATE_BUCKET"
           aws s3api create-bucket \
             --bucket $STATE_BUCKET \
             --region $REGION
-
           sleep 5
-
           aws s3api put-bucket-versioning \
             --bucket $STATE_BUCKET \
             --versioning-configuration Status=Enabled
-          echo "Versioning enabled! ✅"
-
           aws s3api put-bucket-encryption \
             --bucket $STATE_BUCKET \
             --server-side-encryption-configuration '{
@@ -95,8 +83,6 @@ jobs:
                 }
               }]
             }'
-          echo "Encryption enabled! ✅"
-
           aws s3api put-public-access-block \
             --bucket $STATE_BUCKET \
             --public-access-block-configuration \
@@ -104,19 +90,16 @@ jobs:
                IgnorePublicAcls=true,\
                BlockPublicPolicy=true,\
                RestrictPublicBuckets=true"
-          echo "Public access blocked! ✅"
-
-          echo "S3 bucket created: $STATE_BUCKET ✅"
+          echo "State bucket created! ✅"
         fi
 
-        # ── Create DynamoDB lock table if not exists ──
+        # Create DynamoDB lock table if not exists
         if aws dynamodb describe-table \
           --table-name $LOCK_TABLE \
           --region $REGION 2>/dev/null; then
-          echo "DynamoDB table exists: $LOCK_TABLE ✅"
+          echo "Lock table exists: $LOCK_TABLE ✅"
         else
-          echo "Creating DynamoDB table: $LOCK_TABLE"
-
+          echo "Creating lock table: $LOCK_TABLE"
           aws dynamodb create-table \
             --table-name $LOCK_TABLE \
             --attribute-definitions \
@@ -125,22 +108,20 @@ jobs:
               AttributeName=LockID,KeyType=HASH \
             --billing-mode PAY_PER_REQUEST \
             --region $REGION
-
           aws dynamodb wait table-exists \
             --table-name $LOCK_TABLE \
             --region $REGION
-
-          echo "DynamoDB table created: $LOCK_TABLE ✅"
+          echo "Lock table created! ✅"
         fi
 
         echo "========================================="
-        echo " Backend Bootstrap Complete!"
+        echo " Bootstrap Complete!"
         echo " S3      : $STATE_BUCKET"
         echo " DynamoDB: $LOCK_TABLE"
         echo "========================================="
 
     # ─────────────────────────────────────────
-    # STEP 5 - Setup Terraform
+    # STEP 2 - Setup Terraform
     # ─────────────────────────────────────────
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
@@ -148,30 +129,25 @@ jobs:
         terraform_version: 1.12.0
 
     # ─────────────────────────────────────────
-    # STEP 6 - Terraform Init
+    # STEP 3 - Terraform Init
+    # Connects to S3 state backend
     # ─────────────────────────────────────────
     - name: Terraform Init
       run: |
         terraform init
-        echo "Terraform initialized! ✅"
+        echo "Connected to S3 state backend! ✅"
 
-    # ─────────────────────────────────────────
-    # STEP 7 - Terraform Validate
-    # ─────────────────────────────────────────
     - name: Terraform Validate
-      run: |
-        terraform validate
-        echo "Terraform valid! ✅"
+      run: terraform validate
 
-    # ─────────────────────────────────────────
-    # STEP 8 - Terraform Format Check
-    # ─────────────────────────────────────────
     - name: Terraform Format Check
       run: terraform fmt -check
       continue-on-error: true
 
     # ─────────────────────────────────────────
-    # STEP 9 - Terraform Plan
+    # STEP 4 - Terraform Plan
+    # Plans YOUR APP resources only
+    # NOT the state backend resources!
     # ─────────────────────────────────────────
     - name: Terraform Plan
       run: |
@@ -181,12 +157,14 @@ jobs:
           -var="project_name=SpringBootApp" \
           -var="state_bucket_name=custom-s3-terraform-state" \
           -var="lock_table_name=custom-terraform-state-dynamodb-lock" \
+          -var="app_bucket_name=springboot-app-bucket-prod" \
+          -var="app_table_name=Products" \
           -out=tfplan
         echo "Terraform plan complete! ✅"
 
     # ─────────────────────────────────────────
-    # STEP 10 - Terraform Apply
-    # Runs on push to main or manual apply
+    # STEP 5 - Terraform Apply
+    # Creates YOUR APP resources
     # ─────────────────────────────────────────
     - name: Terraform Apply
       if: |
@@ -195,12 +173,8 @@ jobs:
         github.event.inputs.action == 'apply')
       run: |
         terraform apply -auto-approve tfplan
-        echo "Terraform apply complete! ✅"
+        echo "App resources created! ✅"
 
-    # ─────────────────────────────────────────
-    # STEP 11 - Terraform Destroy
-    # Only on manual trigger with destroy action
-    # ─────────────────────────────────────────
     - name: Terraform Destroy
       if: github.event.inputs.action == 'destroy'
       run: |
@@ -209,22 +183,10 @@ jobs:
           -var="environment=prod" \
           -var="project_name=SpringBootApp" \
           -var="state_bucket_name=custom-s3-terraform-state" \
-          -var="lock_table_name=custom-terraform-state-dynamodb-lock"
-        echo "Terraform destroy complete! ✅"
+          -var="lock_table_name=custom-terraform-state-dynamodb-lock" \
+          -var="app_bucket_name=springboot-app-bucket-prod" \
+          -var="app_table_name=Products"
 
-    # ─────────────────────────────────────────
-    # STEP 12 - Show Outputs
-    # ─────────────────────────────────────────
     - name: Show Outputs
       if: github.event.inputs.action != 'destroy'
-      run: |
-        echo "========================================="
-        echo "  FINAL OUTPUTS"
-        echo "========================================="
-        terraform output
-        echo "========================================="
-        echo "  STATE FILE LOCATION"
-        echo "  Bucket : custom-s3-terraform-state"
-        echo "  Key    : infra/terraform.tfstate"
-        echo "  Lock   : custom-terraform-state-dynamodb-lock"
-        echo "========================================="
+      run: terraform output
